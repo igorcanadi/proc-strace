@@ -6,6 +6,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <sys/user.h>
+#include <errno.h>
 
 #define REGSSIZE sizeof(struct user_regs_struct)
 
@@ -23,6 +24,8 @@
  * 3) proctrace does not send signals to the tracer at all.
  * 4) There are some differences between ptrace and proctrace in
  *    signal numbers for different events (fork, vfork, exec...)
+ * 5) Wait doesn't wait for any stop of the child. It waits for
+ *    stops because of interesting events (signal delievery, etc.)
  */
 
 unsigned long long proctrace_wait_mask = 0;
@@ -98,8 +101,8 @@ static long copyfromfile(const char *filename, char* buf, int size) {
 }
 
 static int traceme() {
-	sleep(100000);
-	return 0;
+	fprintf(stderr, "not supported yet\n");
+	exit(1);
 }
 
 static int ctl(const char *command) {
@@ -123,11 +126,16 @@ long proctrace_wait() {
 	} else {
 		char buf[35];
 		sprintf(buf, "/proc/%d/wait", attached_pid);
+		printf("%s\n", buf);
 
 		int fd = open(buf, O_WRONLY);
 		long retvalue;
+		printf("waiting on: %llX\n", proctrace_wait_mask);
 		retvalue = write(fd, &proctrace_wait_mask, 
 				sizeof(proctrace_wait_mask));
+		if (retval < 0) {
+			printf("write to wait failed\n");
+		}
 		close(fd);
 	}
 
@@ -155,6 +163,7 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 		ptrace(PTRACE_ATTACH, pid, NULL, NULL);
 		retval = ptrace(PTRACE_PEEKUSER, pid, addr, data);
 		ptrace(PTRACE_DETACH, pid, NULL, NULL);
+		break;
 	case PTRACE_POKETEXT:
 	case PTRACE_POKEDATA:
 		retval = writefile("mem", (long) addr, (long) data);
@@ -168,8 +177,9 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 	case PTRACE_CONT:
 		if (data) 
 			retval = kill(attached_pid, (int) data);
+		// next time someboy calls proctrace_wait, start the child
 		if (!retval)
-			retval = ctl("start");
+			proctrace_wait_mask |= 1;
 		break;
 	case PTRACE_KILL:
 		retval = kill(attached_pid, SIGKILL);
@@ -208,6 +218,7 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 		break;
 	case PTRACE_ATTACH:
 		attached_pid = pid;
+		kill(pid, SIGSTOP);
 		proctrace_wait_mask = ((1ULL << 31) - 1) << 1;
 		break;
 	case PTRACE_DETACH:
