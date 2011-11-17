@@ -15,7 +15,7 @@ int main()
     else {
         wait(NULL);
         orig_eax = proctrace(PTRACE_PEEKUSER,
-                          child, 4 * ORIG_EAX,
+                          child, (void *) (4 * ORIG_EAX),
                           NULL);
         printf("The child made a "
                "system call %ld\n", orig_eax);
