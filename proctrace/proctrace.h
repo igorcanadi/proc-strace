@@ -94,7 +94,7 @@ static long copyfromfile(const char *filename, char* buf, int size) {
 
 	int fd = open(filenamebuf, O_RDONLY);
 	long retvalue;
-	retvalue = write(fd, buf, size);
+	retvalue = read(fd, buf, size);
 	close(fd);
 
 	return retvalue;
@@ -130,14 +130,22 @@ long proctrace_wait() {
 
 		int fd = open(buf, O_WRONLY);
 		long retvalue;
+		proctrace_wait_mask |= (1ULL << 40);
 		printf("waiting on: %llX\n", proctrace_wait_mask);
-		retvalue = write(fd, &proctrace_wait_mask, 
-				sizeof(proctrace_wait_mask));
+		unsigned long long big_endian = 0;
+		int i;
+		for (i = 0; i < 8; ++i) {
+			big_endian |= ((proctrace_wait_mask >> (8*i)) & ((1 << 8)-1)) << (8-i-1)*8;
+		}
+
+		retvalue = write(fd, &big_endian, sizeof(big_endian));
 		if (retval < 0) {
 			printf("write to wait failed\n");
 		}
 		close(fd);
 	}
+
+	proctrace_wait_mask = ((1ULL << 31) - 1) << 1;
 
 	return retval;
 }
@@ -231,10 +239,10 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 		setoptions((int) data);
 		break;
 	case PTRACE_GETEVENTMSG:
-		copyfromfile("evetmessage", (char *) data, REGSSIZE);
+		copyfromfile("evetmessage", (char *) data, sizeof(unsigned long int));
 		break;
 	case PTRACE_GETSIGINFO:
-		copyfromfile("last_siginfo", (char *) data, REGSSIZE);
+		copyfromfile("last_siginfo", (char *) data, sizeof(siginfo_t));
 		break;
 	case PTRACE_SETSIGINFO:
 		fprintf(stderr, "not supported yet\n");

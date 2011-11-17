@@ -3,11 +3,14 @@
 #include <sys/types.h>
 
 int main() {
+	long long i;
 	printf("%d\n", getpid());
-	printf("start sleep\n");
-	sleep(10);
-	printf("end sleep\n");
-	execl("/bin/ls", "ls", NULL);
+
+	for (i = 0; ; ++i) {
+		if (i % 100000000 == 0) {
+			printf("%lld\n", i);
+		}
+	}
 
 	return 0;
 }
