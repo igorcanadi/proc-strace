@@ -32,3 +32,6 @@ Makefile.in
 /linux/ioctlent.h
 
 /strace-*.tar.xz
+
+/proctrace/test-simple/parent
+/proctrace/test-simple/child
