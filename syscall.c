@@ -34,6 +34,7 @@
  */
 
 #include "defs.h"
+#include "proctrace/proctrace.h"
 
 #include <signal.h>
 #include <time.h>
@@ -777,7 +778,7 @@ get_scno(struct tcb *tcp)
 		if (upeek(tcp, PT_PSWADDR, &pc) < 0)
 			return -1;
 		errno = 0;
-		opcode = ptrace(PTRACE_PEEKTEXT, tcp->pid, (char *)(pc-sizeof(long)), 0);
+		opcode = proctrace(PTRACE_PEEKTEXT, tcp->pid, (char *)(pc-sizeof(long)), 0);
 		if (errno) {
 			perror("peektext(pc-oneword)");
 			return -1;
@@ -818,7 +819,7 @@ get_scno(struct tcb *tcp)
 				return -1;
 			svc_addr += tmp;
 
-			scno = ptrace(PTRACE_PEEKTEXT, tcp->pid, svc_addr, 0);
+			scno = proctrace(PTRACE_PEEKTEXT, tcp->pid, svc_addr, 0);
 			if (errno)
 				return -1;
 #  if defined(S390X)
@@ -871,7 +872,7 @@ get_scno(struct tcb *tcp)
 	/*
 	 * Read complete register set in one go.
 	 */
-	if (ptrace(PTRACE_GETREGS, tcp->pid, NULL, &regs) < 0)
+	if (proctrace(PTRACE_GETREGS, tcp->pid, NULL, &regs) < 0)
 		return -1;
 
 	/*
@@ -986,7 +987,7 @@ get_scno(struct tcb *tcp)
 	/*
 	 * Read complete register set in one go.
 	 */
-	if (ptrace(PTRACE_GETREGS, tcp->pid, NULL, (void *)&regs) == -1)
+	if (proctrace(PTRACE_GETREGS, tcp->pid, NULL, (void *)&regs) == -1)
 		return -1;
 
 	/*
@@ -1014,7 +1015,7 @@ get_scno(struct tcb *tcp)
 			 * Get the ARM-mode system call number
 			 */
 			errno = 0;
-			scno = ptrace(PTRACE_PEEKTEXT, tcp->pid, (void *)(regs.ARM_pc - 4), NULL);
+			scno = proctrace(PTRACE_PEEKTEXT, tcp->pid, (void *)(regs.ARM_pc - 4), NULL);
 			if (errno)
 				return -1;
 
@@ -1068,7 +1069,7 @@ get_scno(struct tcb *tcp)
 # elif defined (LINUX_MIPSN32)
 	unsigned long long regs[38];
 
-	if (ptrace (PTRACE_GETREGS, tcp->pid, NULL, (long) &regs) < 0)
+	if (proctrace (PTRACE_GETREGS, tcp->pid, NULL, (long) &regs) < 0)
 		return -1;
 	a3 = regs[REG_A3];
 	r2 = regs[REG_V0];
@@ -1146,7 +1147,7 @@ get_scno(struct tcb *tcp)
 	}
 # elif defined (SPARC) || defined (SPARC64)
 	/* Everything we need is in the current register set. */
-	if (ptrace(PTRACE_GETREGS, tcp->pid, (char *)&regs, 0) < 0)
+	if (proctrace(PTRACE_GETREGS, tcp->pid, (char *)&regs, 0) < 0)
 		return -1;
 
 	/* If we are entering, then disassemble the syscall trap. */
@@ -1154,10 +1155,10 @@ get_scno(struct tcb *tcp)
 		/* Retrieve the syscall trap instruction. */
 		errno = 0;
 #  if defined(SPARC64)
-		trap = ptrace(PTRACE_PEEKTEXT, tcp->pid, (char *)regs.tpc, 0);
+		trap = proctrace(PTRACE_PEEKTEXT, tcp->pid, (char *)regs.tpc, 0);
 		trap >>= 32;
 #  else
-		trap = ptrace(PTRACE_PEEKTEXT, tcp->pid, (char *)regs.pc, 0);
+		trap = proctrace(PTRACE_PEEKTEXT, tcp->pid, (char *)regs.pc, 0);
 #  endif
 		if (errno)
 			return -1;
@@ -1807,20 +1808,20 @@ force_result(tcp, error, rval)
 #ifdef LINUX
 # if defined(S390) || defined(S390X)
 	gpr2 = error ? -error : rval;
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)PT_GPR2, gpr2) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)PT_GPR2, gpr2) < 0)
 		return -1;
 # elif defined(I386)
 	eax = error ? -error : rval;
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(EAX * 4), eax) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(EAX * 4), eax) < 0)
 		return -1;
 # elif defined(X86_64)
 	rax = error ? -error : rval;
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(RAX * 8), rax) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(RAX * 8), rax) < 0)
 		return -1;
 # elif defined(IA64)
 	if (ia32) {
 		r8 = error ? -error : rval;
-		if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(PT_R8), r8) < 0)
+		if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(PT_R8), r8) < 0)
 			return -1;
 	}
 	else {
@@ -1832,13 +1833,13 @@ force_result(tcp, error, rval)
 			r8 = rval;
 			r10 = 0;
 		}
-		if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(PT_R8), r8) < 0 ||
-		    ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(PT_R10), r10) < 0)
+		if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(PT_R8), r8) < 0 ||
+		    proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(PT_R10), r10) < 0)
 			return -1;
 	}
 # elif defined(BFIN)
 	r0 = error ? -error : rval;
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)PT_R0, r0) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)PT_R0, r0) < 0)
 		return -1;
 # elif defined(MIPS)
 	if (error) {
@@ -1850,8 +1851,8 @@ force_result(tcp, error, rval)
 		a3 = 0;
 	}
 	/* PTRACE_POKEUSER is OK even for n32 since rval is only a long.  */
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(REG_A3), a3) < 0 ||
-	    ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(REG_V0), r2) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(REG_A3), a3) < 0 ||
+	    proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(REG_V0), r2) < 0)
 		return -1;
 # elif defined(POWERPC)
 	if (upeek(tcp, sizeof(unsigned long)*PT_CCR, &flags) < 0)
@@ -1864,20 +1865,20 @@ force_result(tcp, error, rval)
 		flags &= ~SO_MASK;
 		result = rval;
 	}
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(sizeof(unsigned long)*PT_CCR), flags) < 0 ||
-	    ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(sizeof(unsigned long)*PT_R3), result) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(sizeof(unsigned long)*PT_CCR), flags) < 0 ||
+	    proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(sizeof(unsigned long)*PT_R3), result) < 0)
 		return -1;
 # elif defined(M68K)
 	d0 = error ? -error : rval;
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(4*PT_D0), d0) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(4*PT_D0), d0) < 0)
 		return -1;
 # elif defined(ARM)
 	regs.ARM_r0 = error ? -error : rval;
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(4*0), regs.ARM_r0) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(4*0), regs.ARM_r0) < 0)
 		return -1;
 # elif defined(AVR32)
 	regs.r12 = error ? -error : rval;
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)REG_R12, regs.r12) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)REG_R12, regs.r12) < 0)
 		return -1;
 # elif defined(ALPHA)
 	if (error) {
@@ -1888,11 +1889,11 @@ force_result(tcp, error, rval)
 		a3 = 0;
 		r0 = rval;
 	}
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(REG_A3), a3) < 0 ||
-	    ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(REG_R0), r0) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(REG_A3), a3) < 0 ||
+	    proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(REG_R0), r0) < 0)
 		return -1;
 # elif defined(SPARC)
-	if (ptrace(PTRACE_GETREGS, tcp->pid, (char *)&regs, 0) < 0)
+	if (proctrace(PTRACE_GETREGS, tcp->pid, (char *)&regs, 0) < 0)
 		return -1;
 	if (error) {
 		regs.psr |= PSR_C;
@@ -1902,10 +1903,10 @@ force_result(tcp, error, rval)
 		regs.psr &= ~PSR_C;
 		regs.u_regs[U_REG_O0] = rval;
 	}
-	if (ptrace(PTRACE_SETREGS, tcp->pid, (char *)&regs, 0) < 0)
+	if (proctrace(PTRACE_SETREGS, tcp->pid, (char *)&regs, 0) < 0)
 		return -1;
 # elif defined(SPARC64)
-	if (ptrace(PTRACE_GETREGS, tcp->pid, (char *)&regs, 0) < 0)
+	if (proctrace(PTRACE_GETREGS, tcp->pid, (char *)&regs, 0) < 0)
 		return -1;
 	if (error) {
 		regs.tstate |= 0x1100000000UL;
@@ -1915,27 +1916,27 @@ force_result(tcp, error, rval)
 		regs.tstate &= ~0x1100000000UL;
 		regs.u_regs[U_REG_O0] = rval;
 	}
-	if (ptrace(PTRACE_SETREGS, tcp->pid, (char *)&regs, 0) < 0)
+	if (proctrace(PTRACE_SETREGS, tcp->pid, (char *)&regs, 0) < 0)
 		return -1;
 # elif defined(HPPA)
 	r28 = error ? -error : rval;
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(PT_GR28), r28) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(PT_GR28), r28) < 0)
 		return -1;
 # elif defined(SH)
 	r0 = error ? -error : rval;
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)(4*REG_REG0), r0) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)(4*REG_REG0), r0) < 0)
 		return -1;
 # elif defined(SH64)
 	r9 = error ? -error : rval;
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)REG_GENERAL(9), r9) < 0)
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)REG_GENERAL(9), r9) < 0)
 		return -1;
 # endif
 #endif /* LINUX */
 
 #ifdef SUNOS4
-	if (ptrace(PTRACE_POKEUSER, tcp->pid, (char*)uoff(u_error),
+	if (proctrace(PTRACE_POKEUSER, tcp->pid, (char*)uoff(u_error),
 		   error << 24) < 0 ||
-	    ptrace(PTRACE_POKEUSER, tcp->pid, (char*)uoff(u_rval1), rval) < 0)
+	    proctrace(PTRACE_POKEUSER, tcp->pid, (char*)uoff(u_rval1), rval) < 0)
 		return -1;
 #endif /* SUNOS4 */
 
@@ -2068,7 +2069,7 @@ syscall_enter(struct tcb *tcp)
 		else
 			nargs = tcp->u_nargs = MAX_ARGS;
 
-		if (ptrace (PTRACE_GETREGS, tcp->pid, NULL, (long) &regs) < 0)
+		if (proctrace (PTRACE_GETREGS, tcp->pid, NULL, (long) &regs) < 0)
 			return -1;
 
 		for(i = 0; i < nargs; i++) {
@@ -2593,7 +2594,7 @@ trace_syscall_entering(struct tcb *tcp)
 			tprintf("%s(", sysent[tcp->scno].sys_name);
 		/*
 		 * " <unavailable>" will be added later by the code which
-		 * detects ptrace errors.
+		 * detects proctrace errors.
 		 */
 		tcp->flags |= TCB_INSYSCALL;
 		return res;
@@ -2750,7 +2751,7 @@ struct tcb *tcp;
 #ifdef LINUX
 #if defined (SPARC) || defined (SPARC64)
 	struct pt_regs regs;
-	if (ptrace(PTRACE_GETREGS,tcp->pid,(char *)&regs,0) < 0)
+	if (proctrace(PTRACE_GETREGS,tcp->pid,(char *)&regs,0) < 0)
 		return -1;
 	val = regs.u_regs[U_REG_O1];
 #elif defined(SH)

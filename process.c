@@ -38,6 +38,7 @@
  */
 
 #include "defs.h"
+#include "proctrace/proctrace.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -717,7 +718,7 @@ handle_new_child(struct tcb *tcp, int pid, int bpt)
 
 #ifndef CLONE_PTRACE
 	/* Attach to the new child */
-	if (ptrace(PTRACE_ATTACH, pid, (char *) 1, 0) < 0) {
+	if (proctrace(PTRACE_ATTACH, pid, (char *) 1, 0) < 0) {
 		if (bpt)
 			clearbpt(tcp);
 		perror("PTRACE_ATTACH");
@@ -892,7 +893,7 @@ struct tcb *tcp;
 			tv.tv_usec = 10000;
 			select(0, NULL, NULL, NULL, &tv);
 		}
-		if (ptrace(PTRACE_ATTACH, pid, (char *)1, 0) < 0) {
+		if (proctrace(PTRACE_ATTACH, pid, (char *)1, 0) < 0) {
 			perror("PTRACE_ATTACH");
 			fprintf(stderr, "Too late?\n");
 			droptcb(tcpchild);
@@ -903,7 +904,7 @@ struct tcb *tcp;
 		{
 			int i;
 			for (i = 0; i < 1024; i++)
-				if (ptrace(PTRACE_ATTACH, pid, (char *) 1, 0) >= 0)
+				if (proctrace(PTRACE_ATTACH, pid, (char *) 1, 0) >= 0)
 					break;
 			if (i == 1024) {
 				perror("PTRACE_ATTACH");

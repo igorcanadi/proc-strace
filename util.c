@@ -34,6 +34,7 @@
  */
 
 #include "defs.h"
+#include "proctrace/proctrace.h"
 
 #include <signal.h>
 #include <sys/syscall.h>
@@ -190,7 +191,7 @@ do_ptrace(int request, struct tcb *tcp, void *addr, void *data)
 	long l;
 
 	errno = 0;
-	l = ptrace(request, tcp->pid, addr, (long) data);
+	l = proctrace(request, tcp->pid, addr, (long) data);
 	/* Non-ESRCH errors might be our invalid reg/mem accesses,
 	 * we do not record them. */
 	if (errno == ESRCH)
@@ -212,7 +213,7 @@ ptrace_restart(int op, struct tcb *tcp, int sig)
 	const char *msg;
 
 	errno = 0;
-	ptrace(op, tcp->pid, (void *) 1, (long) sig);
+	proctrace(op, tcp->pid, (void *) 1, (long) sig);
 	err = errno;
 	if (!err || err == ESRCH)
 		return 0;
@@ -771,7 +772,7 @@ umoven(struct tcb *tcp, long addr, int len, char *laddr)
 		n = addr - (addr & -sizeof(long)); /* residue */
 		addr &= -sizeof(long); /* residue */
 		errno = 0;
-		u.val = ptrace(PTRACE_PEEKDATA, pid, (char *) addr, 0);
+		u.val = proctrace(PTRACE_PEEKDATA, pid, (char *) addr, 0);
 		if (errno) {
 			if (started && (errno==EPERM || errno==EIO)) {
 				/* Ran into 'end of memory' - stupid "printpath" */
@@ -788,7 +789,7 @@ umoven(struct tcb *tcp, long addr, int len, char *laddr)
 	}
 	while (len) {
 		errno = 0;
-		u.val = ptrace(PTRACE_PEEKDATA, pid, (char *) addr, 0);
+		u.val = proctrace(PTRACE_PEEKDATA, pid, (char *) addr, 0);
 		if (errno) {
 			if (started && (errno==EPERM || errno==EIO)) {
 				/* Ran into 'end of memory' - stupid "printpath" */
@@ -804,38 +805,6 @@ umoven(struct tcb *tcp, long addr, int len, char *laddr)
 	}
 #endif /* LINUX */
 
-#ifdef SUNOS4
-	int pid = tcp->pid;
-	int n;
-
-	while (len) {
-		n = MIN(len, PAGSIZ);
-		n = MIN(n, ((addr + PAGSIZ) & PAGMASK) - addr);
-		if (ptrace(PTRACE_READDATA, pid,
-			   (char *) addr, len, laddr) < 0) {
-			if (errno != ESRCH) {
-				perror("umoven: ptrace(PTRACE_READDATA, ...)");
-				abort();
-			}
-			return -1;
-		}
-		len -= n;
-		addr += n;
-		laddr += n;
-	}
-#endif /* SUNOS4 */
-
-#ifdef USE_PROCFS
-#ifdef HAVE_MP_PROCFS
-	int fd = tcp->pfd_as;
-#else
-	int fd = tcp->pfd;
-#endif
-	lseek(fd, addr, SEEK_SET);
-	if (read(fd, laddr, len) == -1)
-		return -1;
-#endif /* USE_PROCFS */
-
 	return 0;
 }
 
@@ -846,36 +815,6 @@ umoven(struct tcb *tcp, long addr, int len, char *laddr)
 int
 umovestr(struct tcb *tcp, long addr, int len, char *laddr)
 {
-#ifdef USE_PROCFS
-#ifdef HAVE_MP_PROCFS
-	int fd = tcp->pfd_as;
-#else
-	int fd = tcp->pfd;
-#endif
-	/* Some systems (e.g. FreeBSD) can be upset if we read off the
-	   end of valid memory,  avoid this by trying to read up
-	   to page boundaries.  But we don't know what a page is (and
-	   getpagesize(2) (if it exists) doesn't necessarily return
-	   hardware page size).  Assume all pages >= 1024 (a-historical
-	   I know) */
-
-	int page = 1024; 	/* How to find this? */
-	int move = page - (addr & (page - 1));
-	int left = len;
-
-	lseek(fd, addr, SEEK_SET);
-
-	while (left) {
-		if (move > left) move = left;
-		if ((move = read(fd, laddr, move)) <= 0)
-			return left != len ? 0 : -1;
-		if (memchr (laddr, 0, move)) break;
-		left -= move;
-		laddr += move;
-		addr += move;
-		move = page;
-	}
-#else /* !USE_PROCFS */
 	int started = 0;
 	int pid = tcp->pid;
 	int i, n, m;
@@ -889,7 +828,7 @@ umovestr(struct tcb *tcp, long addr, int len, char *laddr)
 		n = addr - (addr & -sizeof(long)); /* residue */
 		addr &= -sizeof(long); /* residue */
 		errno = 0;
-		u.val = ptrace(PTRACE_PEEKDATA, pid, (char *)addr, 0);
+		u.val = proctrace(PTRACE_PEEKDATA, pid, (char *)addr, 0);
 		if (errno) {
 			if (started && (errno==EPERM || errno==EIO)) {
 				/* Ran into 'end of memory' - stupid "printpath" */
@@ -908,7 +847,7 @@ umovestr(struct tcb *tcp, long addr, int len, char *laddr)
 	}
 	while (len) {
 		errno = 0;
-		u.val = ptrace(PTRACE_PEEKDATA, pid, (char *)addr, 0);
+		u.val = proctrace(PTRACE_PEEKDATA, pid, (char *)addr, 0);
 		if (errno) {
 			if (started && (errno==EPERM || errno==EIO)) {
 				/* Ran into 'end of memory' - stupid "printpath" */
@@ -937,82 +876,6 @@ umovestr(struct tcb *tcp, long addr, int len, char *laddr)
 # endif /* !SPARC && !SPARC64 */
 #endif /* LINUX */
 
-#ifdef SUNOS4
-
-static int
-uload(cmd, pid, addr, len, laddr)
-int cmd;
-int pid;
-long addr;
-int len;
-char *laddr;
-{
-	int peek, poke;
-	int n, m;
-	union {
-		long val;
-		char x[sizeof(long)];
-	} u;
-
-	if (cmd == PTRACE_WRITETEXT) {
-		peek = PTRACE_PEEKTEXT;
-		poke = PTRACE_POKETEXT;
-	}
-	else {
-		peek = PTRACE_PEEKDATA;
-		poke = PTRACE_POKEDATA;
-	}
-	if (addr & (sizeof(long) - 1)) {
-		/* addr not a multiple of sizeof(long) */
-		n = addr - (addr & -sizeof(long)); /* residue */
-		addr &= -sizeof(long);
-		errno = 0;
-		u.val = ptrace(peek, pid, (char *) addr, 0);
-		if (errno) {
-			perror("uload: POKE");
-			return -1;
-		}
-		memcpy(&u.x[n], laddr, m = MIN(sizeof(long) - n, len));
-		if (ptrace(poke, pid, (char *)addr, u.val) < 0) {
-			perror("uload: POKE");
-			return -1;
-		}
-		addr += sizeof(long), laddr += m, len -= m;
-	}
-	while (len) {
-		if (len < sizeof(long))
-			u.val = ptrace(peek, pid, (char *) addr, 0);
-		memcpy(u.x, laddr, m = MIN(sizeof(long), len));
-		if (ptrace(poke, pid, (char *) addr, u.val) < 0) {
-			perror("uload: POKE");
-			return -1;
-		}
-		addr += sizeof(long), laddr += m, len -= m;
-	}
-	return 0;
-}
-
-int
-tload(pid, addr, len, laddr)
-int pid;
-int addr, len;
-char *laddr;
-{
-	return uload(PTRACE_WRITETEXT, pid, addr, len, laddr);
-}
-
-int
-dload(pid, addr, len, laddr)
-int pid;
-int addr;
-int len;
-char *laddr;
-{
-	return uload(PTRACE_WRITEDATA, pid, addr, len, laddr);
-}
-
-#endif /* SUNOS4 */
-
 #ifndef USE_PROCFS
 
 int
@@ -1023,29 +886,6 @@ long *res;
 {
 	long val;
 
-# ifdef SUNOS4_KERNEL_ARCH_KLUDGE
-	{
-		static int is_sun4m = -1;
-		struct utsname name;
-
-		/* Round up the usual suspects. */
-		if (is_sun4m == -1) {
-			if (uname(&name) < 0) {
-				perror("upeek: uname?");
-				exit(1);
-			}
-			is_sun4m = strcmp(name.machine, "sun4m") == 0;
-			if (is_sun4m) {
-				const struct xlat *x;
-
-				for (x = struct_user_offsets; x->str; x++)
-					x->val += 1024;
-			}
-		}
-		if (is_sun4m)
-			off += 1024;
-	}
-# endif /* SUNOS4_KERNEL_ARCH_KLUDGE */
 	errno = 0;
 	val = do_ptrace(PTRACE_PEEKUSER, tcp, (char *) off, 0);
 	if (val == -1 && errno) {
@@ -1137,7 +977,7 @@ printcall(struct tcb *tcp)
 	tprintf("[%08lx] ", pc);
 # elif defined(SPARC) || defined(SPARC64)
 	struct pt_regs regs;
-	if (ptrace(PTRACE_GETREGS,tcp->pid,(char *)&regs,0) < 0) {
+	if (proctrace(PTRACE_GETREGS,tcp->pid,(char *)&regs,0) < 0) {
 		PRINTBADPC;
 		return;
 	}
@@ -1224,7 +1064,7 @@ printcall(struct tcb *tcp)
 #ifdef SUNOS4
 	struct regs regs;
 
-	if (ptrace(PTRACE_GETREGS, tcp->pid, (char *) &regs, 0) < 0) {
+	if (proctrace(PTRACE_GETREGS, tcp->pid, (char *) &regs, 0) < 0) {
 		perror("printcall: ptrace(PTRACE_GETREGS, ...)");
 		PRINTBADPC;
 		return;
@@ -1347,7 +1187,7 @@ set_arg0 (struct tcb *tcp, arg_setup_state *state, long val)
 	} else
 		ap = ia64_rse_skip_regs(*state, 0);
 	errno = 0;
-	ptrace(req, tcp->pid, ap, val);
+	proctrace(req, tcp->pid, ap, val);
 	return errno ? -1 : 0;
 }
 
@@ -1363,7 +1203,7 @@ set_arg1 (struct tcb *tcp, arg_setup_state *state, long val)
 	} else
 		ap = ia64_rse_skip_regs(*state, 1);
 	errno = 0;
-	ptrace(req, tcp->pid, ap, val);
+	proctrace(req, tcp->pid, ap, val);
 	return errno ? -1 : 0;
 }
 
@@ -1378,9 +1218,9 @@ set_arg1 (struct tcb *tcp, arg_setup_state *state, long val)
 typedef struct pt_regs arg_setup_state;
 
 #   define arg_setup(tcp, state) \
-    (ptrace (PTRACE_GETREGS, tcp->pid, (char *) (state), 0))
+    (proctrace (PTRACE_GETREGS, tcp->pid, (char *) (state), 0))
 #   define arg_finish_change(tcp, state) \
-    (ptrace (PTRACE_SETREGS, tcp->pid, (char *) (state), 0))
+    (proctrace (PTRACE_SETREGS, tcp->pid, (char *) (state), 0))
 
 #   define get_arg0(tcp, state, valp) (*(valp) = (state)->u_regs[U_REG_O0], 0)
 #   define get_arg1(tcp, state, valp) (*(valp) = (state)->u_regs[U_REG_O1], 0)
@@ -1452,13 +1292,13 @@ typedef int arg_setup_state;
 static int
 set_arg0 (struct tcb *tcp, void *cookie, long val)
 {
-	return ptrace (PTRACE_POKEUSER, tcp->pid, (char*)arg0_offset, val);
+	return proctrace (PTRACE_POKEUSER, tcp->pid, (char*)arg0_offset, val);
 }
 
 static int
 set_arg1 (struct tcb *tcp, void *cookie, long val)
 {
-	return ptrace (PTRACE_POKEUSER, tcp->pid, (char*)arg1_offset, val);
+	return proctrace (PTRACE_POKEUSER, tcp->pid, (char*)arg1_offset, val);
 }
 
 #  endif /* architectures */
@@ -1593,12 +1433,12 @@ struct tcb *tcp;
 		fprintf(stderr, "PANIC: TCB already set in pid %u\n", tcp->pid);
 		return -1;
 	}
-	if (ptrace(PTRACE_GETREGS, tcp->pid, (char *)&regs, 0) < 0) {
+	if (proctrace(PTRACE_GETREGS, tcp->pid, (char *)&regs, 0) < 0) {
 		perror("setbpt: ptrace(PTRACE_GETREGS, ...)");
 		return -1;
 	}
 	tcp->baddr = regs.r_o7 + 8;
-	if (ptrace(PTRACE_READTEXT, tcp->pid, (char *)tcp->baddr,
+	if (proctrace(PTRACE_READTEXT, tcp->pid, (char *)tcp->baddr,
 				sizeof tcp->inst, (char *)tcp->inst) < 0) {
 		perror("setbpt: ptrace(PTRACE_READTEXT, ...)");
 		return -1;
@@ -1614,7 +1454,7 @@ struct tcb *tcp;
 	 * generated by out PTRACE_ATTACH.
 	 * Of cause, if we evaporate ourselves in the middle of all this...
 	 */
-	if (ptrace(PTRACE_WRITETEXT, tcp->pid, (char *) tcp->baddr,
+	if (proctrace(PTRACE_WRITETEXT, tcp->pid, (char *) tcp->baddr,
 			sizeof loopdeloop, (char *) loopdeloop) < 0) {
 		perror("setbpt: ptrace(PTRACE_WRITETEXT, ...)");
 		return -1;
@@ -1642,7 +1482,7 @@ struct tcb *tcp;
 		fprintf(stderr, "PANIC: TCB not set in pid %u\n", tcp->pid);
 		return -1;
 	}
-	if (ptrace(PTRACE_WRITETEXT, tcp->pid, (char *) tcp->baddr,
+	if (proctrace(PTRACE_WRITETEXT, tcp->pid, (char *) tcp->baddr,
 				sizeof tcp->inst, (char *) tcp->inst) < 0) {
 		perror("clearbtp: ptrace(PTRACE_WRITETEXT, ...)");
 		return -1;
@@ -1654,7 +1494,7 @@ struct tcb *tcp;
 	 * Since we don't have a single instruction breakpoint, we may have
 	 * to adjust the program counter after removing our `breakpoint'.
 	 */
-	if (ptrace(PTRACE_GETREGS, tcp->pid, (char *)&regs, 0) < 0) {
+	if (proctrace(PTRACE_GETREGS, tcp->pid, (char *)&regs, 0) < 0) {
 		perror("clearbpt: ptrace(PTRACE_GETREGS, ...)");
 		return -1;
 	}
@@ -1673,7 +1513,7 @@ struct tcb *tcp;
 				regs.r_pc, tcp->baddr);
 
 	regs.r_pc = tcp->baddr;
-	if (ptrace(PTRACE_SETREGS, tcp->pid, (char *)&regs, 0) < 0) {
+	if (proctrace(PTRACE_SETREGS, tcp->pid, (char *)&regs, 0) < 0) {
 		perror("clearbpt: ptrace(PTRACE_SETREGS, ...)");
 		return -1;
 	}
