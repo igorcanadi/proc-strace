@@ -807,10 +807,6 @@ Process %u resumed (parent %d ready)\n",
 int
 internal_fork(struct tcb *tcp)
 {
-	if ((ptrace_setoptions
-	    & (PTRACE_O_TRACECLONE | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK))
-	   == (PTRACE_O_TRACECLONE | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK))
-		return 0;
 
 	if (entering(tcp)) {
 		tcp->flags &= ~TCB_FOLLOWFORK;

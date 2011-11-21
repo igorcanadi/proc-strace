@@ -80,23 +80,9 @@ extern char *optarg;
 
 
 int debug = 0, followfork = 0;
-unsigned int ptrace_setoptions = 0;
 int dtime = 0, xflag = 0, qflag = 0;
 cflag_t cflag = CFLAG_NONE;
 static int iflag = 0, interactive = 0, pflag_seen = 0, rflag = 0, tflag = 0;
-/*
- * daemonized_tracer supports -D option.
- * With this option, strace forks twice.
- * Unlike normal case, with -D *grandparent* process exec's,
- * becoming a traced process. Child exits (this prevents traced process
- * from having children it doesn't expect to have), and grandchild
- * attaches to grandparent similarly to strace -p PID.
- * This allows for more transparent interaction in cases
- * when process and its parent are communicating via signals,
- * wait() etc. Without -D, strace process gets lodged in between,
- * disrupting parent<->child link.
- */
-static bool daemonized_tracer = 0;
 
 /* Sometimes we want to print only succeeding syscalls. */
 int not_failing_only = 0;
@@ -357,10 +343,8 @@ startup_attach(void)
 		tcp = tcbtab[tcbi];
 		if (!(tcp->flags & TCB_INUSE) || !(tcp->flags & TCB_ATTACHED))
 			continue;
-#ifdef LINUX
 		if (tcp->flags & TCB_CLONE_THREAD)
 			continue;
-#endif
 		/* Reinitialize the output since it may have changed. */
 		tcp->outf = outf;
 		if (newoutf(tcp) < 0)
@@ -372,19 +356,6 @@ startup_attach(void)
 			continue;
 		}
 		/* INTERRUPTED is going to be checked at the top of TRACE.  */
-
-		if (daemonized_tracer) {
-			/*
-			 * It is our grandparent we trace, not a -p PID.
-			 * Don't want to just detach on exit, so...
-			 */
-			tcp->flags &= ~TCB_ATTACHED;
-			/*
-			 * Make parent go away.
-			 * Also makes grandparent's wait() unblock.
-			 */
-			kill(getppid(), SIGKILL);
-		}
 
 		if (!qflag)
 			fprintf(stderr,
@@ -468,21 +439,17 @@ startup_child (char **argv)
 		cleanup();
 		exit(1);
 	}
-	if ((pid != 0 && daemonized_tracer) /* parent: to become a traced process */
-	 || (pid == 0 && !daemonized_tracer) /* child: to become a traced process */
-	) {
+	if (pid == 0 /* child: to become a traced process */) {
 		pid = getpid();
 		if (outf!=stderr)
 			close(fileno (outf));
 
-		if (!daemonized_tracer) {
-			if (proctrace(PTRACE_TRACEME, 0, (char *) 1, 0) < 0) {
-				perror("strace: ptrace(PTRACE_TRACEME, ...)");
-				exit(1);
-			}
-			if (debug)
-				kill(pid, SIGSTOP);
+		if (proctrace(PTRACE_TRACEME, 0, (char *) 1, 0) < 0) {
+			perror("strace: ptrace(PTRACE_TRACEME, ...)");
+			exit(1);
 		}
+		if (debug)
+			kill(pid, SIGSTOP);
 
 		if (username != NULL || geteuid() == 0) {
 			uid_t run_euid = run_uid;
@@ -515,33 +482,15 @@ startup_child (char **argv)
 		else
 			setreuid(run_uid, run_uid);
 
-		if (!daemonized_tracer) {
-			/*
-			 * Induce an immediate stop so that the parent
-			 * will resume us with PTRACE_SYSCALL and display
-			 * this execve call normally.
-			 * Unless of course we're on a no-MMU system where
-			 * we vfork()-ed, so we cannot stop the child.
-			 */
-			if (!strace_vforked)
-				kill(getpid(), SIGSTOP);
-		} else {
-			struct sigaction sv_sigchld;
-			sigaction(SIGCHLD, NULL, &sv_sigchld);
-			/*
-			 * Make sure it is not SIG_IGN, otherwise wait
-			 * will not block.
-			 */
-			signal(SIGCHLD, SIG_DFL);
-			/*
-			 * Wait for grandchild to attach to us.
-			 * It kills child after that, and wait() unblocks.
-			 */
-			alarm(3);
-			wait(NULL);
-			alarm(0);
-			sigaction(SIGCHLD, &sv_sigchld, NULL);
-		}
+		/*
+		 * Induce an immediate stop so that the parent
+		 * will resume us with PTRACE_SYSCALL and display
+		 * this execve call normally.
+		 * Unless of course we're on a no-MMU system where
+		 * we vfork()-ed, so we cannot stop the child.
+		 */
+		if (!strace_vforked)
+			kill(getpid(), SIGSTOP);
 
 		execv(pathname, argv);
 		perror("strace: exec");
@@ -549,11 +498,7 @@ startup_child (char **argv)
 	}
 
 	/* We are the tracer.  */
-	tcp = alloctcb(daemonized_tracer ? getppid() : pid);
-	if (daemonized_tracer) {
-		/* We want subsequent startup_attach() to attach to it.  */
-		tcp->flags |= TCB_ATTACHED;
-	}
+	tcp = alloctcb(pid);
 }
 
 int
@@ -612,9 +557,6 @@ main(int argc, char *argv[])
 			break;
 		case 'd':
 			debug++;
-			break;
-		case 'D':
-			daemonized_tracer = 1;
 			break;
 		case 'F':
 			optF = 1;
@@ -710,13 +652,6 @@ main(int argc, char *argv[])
 
 	if ((optind == argc) == !pflag_seen)
 		usage(stderr, 1);
-
-	if (pflag_seen && daemonized_tracer) {
-		fprintf(stderr,
-			"%s: -D and -p are mutually exclusive options\n",
-			progname);
-		exit(1);
-	}
 
 	if (!followfork)
 		followfork = optF;
@@ -828,7 +763,7 @@ main(int argc, char *argv[])
 	sa.sa_handler = SIG_DFL;
 	sigaction(SIGCHLD, &sa, NULL);
 
-	if (pflag_seen || daemonized_tracer)
+	if (pflag_seen)
 		startup_attach();
 
 	if (trace() < 0)
@@ -995,7 +930,6 @@ struct tcb *tcp;
 		tcp->parent->nclone_waiting--;
 #endif
 
-	// TODO:PROC
 	if (ptrace_restart(PTRACE_SYSCALL, tcp, 0) < 0)
 		return -1;
 
@@ -1081,7 +1015,6 @@ struct tcb *tcp;
 int sig;
 {
 	int error = 0;
-#ifdef LINUX
 	int status, catch_sigstop;
 	struct tcb *zombie = NULL;
 
@@ -1091,125 +1024,13 @@ int sig;
 	    tcp->parent->nclone_threads == 1 &&
 	    (tcp->parent->flags & TCB_EXITING))
 		zombie = tcp->parent;
-#endif
 
 	if (tcp->flags & TCB_BPTSET)
 		clearbpt(tcp);
 
+	// PROCTRACE
 	// we don't need to detach
 	return 0;
-
-#ifdef LINUX
-	/*
-	 * Linux wrongly insists the child be stopped
-	 * before detaching.  Arghh.  We go through hoops
-	 * to make a clean break of things.
-	 */
-#if defined(SPARC)
-#undef PTRACE_DETACH
-#define PTRACE_DETACH PTRACE_SUNDETACH
-#endif
-	/*
-	 * On TCB_STARTUP we did PTRACE_ATTACH but still did not get the
-	 * expected SIGSTOP.  We must catch exactly one as otherwise the
-	 * detached process would be left stopped (process state T).
-	 */
-	catch_sigstop = (tcp->flags & TCB_STARTUP);
-	// checked
-	if ((error = ptrace(PTRACE_DETACH, tcp->pid, (char *) 1, sig)) == 0) {
-		/* On a clear day, you can see forever. */
-	}
-	else if (errno != ESRCH) {
-		/* Shouldn't happen. */
-		perror("detach: ptrace(PTRACE_DETACH, ...)");
-	}
-	else if (my_tgkill((tcp->flags & TCB_CLONE_THREAD ? tcp->parent->pid
-							  : tcp->pid),
-			   tcp->pid, 0) < 0) {
-		if (errno != ESRCH)
-			perror("detach: checking sanity");
-	}
-	else if (!catch_sigstop && my_tgkill((tcp->flags & TCB_CLONE_THREAD
-					      ? tcp->parent->pid : tcp->pid),
-					     tcp->pid, SIGSTOP) < 0) {
-		if (errno != ESRCH)
-			perror("detach: stopping child");
-	}
-	else
-		catch_sigstop = 1;
-	if (catch_sigstop) {
-		for (;;) {
-#ifdef __WALL
-			if (wait4(tcp->pid, &status, __WALL, NULL) < 0) {
-				if (errno == ECHILD) /* Already gone.  */
-					break;
-				if (errno != EINVAL) {
-					perror("detach: waiting");
-					break;
-				}
-#endif /* __WALL */
-				/* No __WALL here.  */
-				if (waitpid(tcp->pid, &status, 0) < 0) {
-					if (errno != ECHILD) {
-						perror("detach: waiting");
-						break;
-					}
-#ifdef __WCLONE
-					/* If no processes, try clones.  */
-					if (wait4(tcp->pid, &status, __WCLONE,
-						  NULL) < 0) {
-						if (errno != ECHILD)
-							perror("detach: waiting");
-						break;
-					}
-#endif /* __WCLONE */
-				}
-#ifdef __WALL
-			}
-#endif
-			if (!WIFSTOPPED(status)) {
-				/* Au revoir, mon ami. */
-				break;
-			}
-			if (WSTOPSIG(status) == SIGSTOP) {
-				// checked
-				ptrace_restart(PTRACE_DETACH, tcp, sig);
-				break;
-			}
-			// checked
-			error = ptrace_restart(PTRACE_CONT, tcp,
-					WSTOPSIG(status) == SIGTRAP ? 0
-					: WSTOPSIG(status));
-			if (error < 0)
-				break;
-		}
-	}
-#endif /* LINUX */
-
-#if defined(SUNOS4)
-	/* PTRACE_DETACH won't respect `sig' argument, so we post it here. */
-	if (sig && kill(tcp->pid, sig) < 0)
-		perror("detach: kill");
-	sig = 0;
-	// checked
-	error = ptrace_restart(PTRACE_DETACH, tcp, sig);
-#endif /* SUNOS4 */
-
-	error |= resume_from_tcp (tcp);
-
-	if (!qflag)
-		fprintf(stderr, "Process %u detached\n", tcp->pid);
-
-	droptcb(tcp);
-
-#ifdef LINUX
-	if (zombie != NULL) {
-		/* TCP no longer exists therefore you must not detach () it.  */
-		droptcb(zombie);
-	}
-#endif
-
-	return error;
 }
 
 
@@ -1337,7 +1158,6 @@ handle_group_exit(struct tcb *tcp, int sig)
 			if (leader != NULL && leader != tcp)
 				leader->flags |= TCB_GROUP_EXITING;
 		} else {
-			// half-checked
 			if (ptrace_restart(PTRACE_CONT, tcp, sig) < 0) {
 				cleanup();
 				return -1;
@@ -1357,33 +1177,6 @@ handle_group_exit(struct tcb *tcp, int sig)
 }
 #endif
 
-#ifdef LINUX
-// TODO:PROC
-static int
-handle_ptrace_event(int status, struct tcb *tcp)
-{
-	if (status >> 16 == PTRACE_EVENT_VFORK ||
-	    status >> 16 == PTRACE_EVENT_CLONE ||
-	    status >> 16 == PTRACE_EVENT_FORK) {
-		long childpid;
-
-		// TODO:PROC
-		if (do_ptrace(PTRACE_GETEVENTMSG, tcp, NULL, &childpid) < 0) {
-			if (errno != ESRCH) {
-				fprintf(stderr, "\
-%s: handle_ptrace_event: ptrace cannot get new child's pid\n",
-					progname);
-				cleanup();
-				exit(1);
-			}
-			return -1;
-		}
-		return handle_new_child(tcp, childpid, 0);
-	}
-	return 1;
-}
-#endif
-
 static int
 trace()
 {
@@ -1391,20 +1184,14 @@ trace()
 	int wait_errno;
 	int status;
 	struct tcb *tcp;
-#ifdef LINUX
 	struct rusage ru;
-#ifdef __WALL
 	static int wait4_options = __WALL;
-#endif
-#endif /* LINUX */
 
 	while (nprocs != 0) {
 		if (interrupted)
 			return 0;
 		if (interactive)
 			sigprocmask(SIG_SETMASK, &empty_set, NULL);
-#ifdef LINUX
-#ifdef __WALL
 		pid = wait4(-1, &status, wait4_options, cflag ? &ru : NULL);
 		if (pid < 0 && (wait4_options & __WALL) && errno == EINVAL) {
 			/* this kernel does not support __WALL */
@@ -1422,13 +1209,6 @@ trace()
 						"failed: %s\n", strerror(errno));
 			}
 		}
-#else
-		pid = wait4(-1, &status, 0, cflag ? &ru : NULL);
-#endif /* __WALL */
-#endif /* LINUX */
-#ifdef SUNOS4
-		pid = wait(&status);
-#endif /* SUNOS4 */
 		wait_errno = errno;
 		if (interactive)
 			sigprocmask(SIG_BLOCK, &blocked_set, NULL);
@@ -1461,7 +1241,6 @@ trace()
 
 		/* Look up `pid' in our table. */
 		if ((tcp = pid2tcb(pid)) == NULL) {
-#ifdef LINUX
 			if (followfork) {
 				/* This is needed to go with the CLONE_PTRACE
 				   changes in process.c/util.c: we might see
@@ -1482,7 +1261,6 @@ Process %d attached (waiting for parent)\n",
 			else
 				/* This can happen if a clone call used
 				   CLONE_PTRACE itself.  */
-#endif
 			{
 				fprintf(stderr, "unknown pid: %u\n", pid);
 				if (WIFSTOPPED(status))
@@ -1495,10 +1273,8 @@ Process %d attached (waiting for parent)\n",
 		outf = tcp->outf;
 		curcol = tcp->curcol;
 		if (cflag) {
-#ifdef LINUX
 			tv_sub(&tcp->dtime, &ru.ru_stime, &tcp->stime);
 			tcp->stime = ru.ru_stime;
-#endif /* !LINUX */
 		}
 
 		if (tcp->flags & TCB_SUSPENDED) {
@@ -1570,11 +1346,6 @@ Process %d attached (waiting for parent)\n",
 			fprintf(stderr, "pid %u stopped, [%s]\n",
 				pid, signame(WSTOPSIG(status)));
 
-		if (ptrace_setoptions && (status >> 16)) {
-			if (handle_ptrace_event(status, tcp) != 1)
-				goto tracing;
-		}
-
 		/*
 		 * Interestingly, the process may stop
 		 * with STOPSIG equal to some other signal
@@ -1602,14 +1373,6 @@ Process %d attached (waiting for parent)\n",
 					return -1;
 				}
 			}
-#ifdef LINUX
-			if (followfork && (tcp->parent == NULL) && ptrace_setoptions)
-				// checked
-				if (ptrace(PTRACE_SETOPTIONS, tcp->pid,
-					   NULL, ptrace_setoptions) < 0 &&
-				    errno != ESRCH)
-					ptrace_setoptions = 0;
-#endif
 			goto tracing;
 		}
 
