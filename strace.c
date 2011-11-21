@@ -312,15 +312,6 @@ strace_popen(const char *command)
 static int
 newoutf(struct tcb *tcp)
 {
-	if (outfname && followfork > 1) {
-		char name[520 + sizeof(int) * 3];
-		FILE *fp;
-
-		sprintf(name, "%.512s.%u", outfname, tcp->pid);
-		if ((fp = strace_fopen(name, "w")) == NULL)
-			return -1;
-		tcp->outf = fp;
-	}
 	return 0;
 }
 
@@ -506,7 +497,6 @@ main(int argc, char *argv[])
 {
 	struct tcb *tcp;
 	int c, pid = 0;
-	int optF = 0;
 	struct sigaction sa;
 
 	static char buf[BUFSIZ];
@@ -559,10 +549,8 @@ main(int argc, char *argv[])
 			debug++;
 			break;
 		case 'F':
-			optF = 1;
-			break;
 		case 'f':
-			followfork++;
+			printf("We don't do follow fork\n");
 			break;
 		case 'h':
 			usage(stdout, 0);
@@ -653,16 +641,6 @@ main(int argc, char *argv[])
 	if ((optind == argc) == !pflag_seen)
 		usage(stderr, 1);
 
-	if (!followfork)
-		followfork = optF;
-
-	if (followfork > 1 && cflag) {
-		fprintf(stderr,
-			"%s: (-c or -C) and -ff are mutually exclusive options\n",
-			progname);
-		exit(1);
-	}
-
 	/* See if they want to run as another user. */
 	if (username != NULL) {
 		struct passwd *pent;
@@ -694,18 +672,11 @@ main(int argc, char *argv[])
 			 * We can't do the <outfname>.PID funny business
 			 * when using popen, so prohibit it.
 			 */
-			if (followfork > 1) {
-				fprintf(stderr, "\
-%s: piping the output and -ff are mutually exclusive options\n",
-					progname);
-				exit(1);
-			}
 
 			if ((outf = strace_popen(outfname + 1)) == NULL)
 				exit(1);
 		}
-		else if (followfork <= 1 &&
-			 (outf = strace_fopen(outfname, "w")) == NULL)
+		else if ((outf = strace_fopen(outfname, "w")) == NULL)
 			exit(1);
 	}
 
@@ -907,9 +878,6 @@ struct tcb *tcp;
 		tcp->pfd = -1;
 	}
 
-	if (outfname && followfork > 1 && tcp->outf)
-		fclose(tcp->outf);
-
 	tcp->outf = 0;
 }
 
@@ -1047,8 +1015,7 @@ cleanup()
 		if (debug)
 			fprintf(stderr,
 				"cleanup: looking at pid %u\n", tcp->pid);
-		if (tcp_last &&
-		    (!outfname || followfork < 2 || tcp_last == tcp)) {
+		if (tcp_last) {
 			tprintf(" <unfinished ...>");
 			printtrailer();
 		}
@@ -1192,15 +1159,9 @@ trace()
 			return 0;
 		if (interactive)
 			sigprocmask(SIG_SETMASK, &empty_set, NULL);
-		pid = wait4(-1, &status, wait4_options, cflag ? &ru : NULL);
-		if (pid < 0 && (wait4_options & __WALL) && errno == EINVAL) {
-			/* this kernel does not support __WALL */
-			wait4_options &= ~__WALL;
-			errno = 0;
-			pid = wait4(-1, &status, wait4_options,
-					cflag ? &ru : NULL);
-		}
+		pid = proctrace_wait(-1, &status, wait4_options, cflag ? &ru : NULL);
 		if (pid < 0 && !(wait4_options & __WALL) && errno == ECHILD) {
+			printf("This should not happen\n");
 			/* most likely a "cloned" process */
 			pid = wait4(-1, &status, __WCLONE,
 					cflag ? &ru : NULL);
@@ -1241,33 +1202,12 @@ trace()
 
 		/* Look up `pid' in our table. */
 		if ((tcp = pid2tcb(pid)) == NULL) {
-			if (followfork) {
-				/* This is needed to go with the CLONE_PTRACE
-				   changes in process.c/util.c: we might see
-				   the child's initial trap before we see the
-				   parent return from the clone syscall.
-				   Leave the child suspended until the parent
-				   returns from its system call.  Only then
-				   will we have the association of parent and
-				   child so that we know how to do clearbpt
-				   in the child.  */
-				tcp = alloctcb(pid);
-				tcp->flags |= TCB_ATTACHED | TCB_SUSPENDED;
-				if (!qflag)
-					fprintf(stderr, "\
-Process %d attached (waiting for parent)\n",
-						pid);
-			}
-			else
-				/* This can happen if a clone call used
-				   CLONE_PTRACE itself.  */
-			{
-				fprintf(stderr, "unknown pid: %u\n", pid);
-				if (WIFSTOPPED(status))
-					// TODO:PROC
-					ptrace(PTRACE_CONT, pid, (char *) 1, 0);
-				exit(1);
-			}
+			/* This can happen if a clone call used
+			   CLONE_PTRACE itself.  */
+			fprintf(stderr, "unknown pid: %u\n", pid);
+			if (WIFSTOPPED(status))
+				proctrace(PTRACE_CONT, pid, (char *) 1, 0);
+			exit(1);
 		}
 		/* set current output file */
 		outf = tcp->outf;
@@ -1409,8 +1349,7 @@ Process %d attached (waiting for parent)\n",
 # define PC_FORMAT_ARG	""
 #endif
 				printleader(tcp);
-				// TODO:PROC
-				if (ptrace(PTRACE_GETSIGINFO, pid, 0, &si) == 0) {
+				if (proctrace(PTRACE_GETSIGINFO, pid, 0, &si) == 0) {
 					tprintf("--- ");
 					printsiginfo(&si, verbose(tcp));
 					tprintf(" (%s)" PC_FORMAT_STR " ---",
@@ -1462,8 +1401,7 @@ Process %d attached (waiting for parent)\n",
 				}
 				detach(tcp, 0);
 			} else {
-				// TODO:PROC
-				ptrace(PTRACE_KILL,
+				proctrace(PTRACE_KILL,
 					tcp->pid, (char *) 1, SIGTERM);
 				droptcb(tcp);
 			}
@@ -1534,13 +1472,13 @@ struct tcb *tcp;
 			}
 			tprintf("= ? <unavailable>\n");
 			tcp_last->ptrace_errno = 0;
-		} else if (!outfname || followfork < 2 || tcp_last == tcp) {
+		} else {
 			tcp_last->flags |= TCB_REPRINT;
 			tprintf(" <unfinished ...>\n");
 		}
 	}
 	curcol = 0;
-	if ((followfork == 1 || pflag_seen > 1) && outfname)
+	if (pflag_seen > 1 && outfname)
 		tprintf("%-5d ", tcp->pid);
 	else if (nprocs > 1 && !outfname)
 		tprintf("[pid %5u] ", tcp->pid);

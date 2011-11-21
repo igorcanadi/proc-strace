@@ -121,9 +121,13 @@ static int ctl(const char *command) {
 	return retvalue;
 }
 
+long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *data);
+
 // substitute for wait4() system call
-long proctrace_wait() {
-	long retval;
+pid_t proctrace_wait(pid_t pid, int *status, int options, struct rusage *rusage) {
+	return wait4(pid, status, options, rusage);
+
+	pid_t retval;
 	if (singlestep) {
 		retval = ctl("step");
 		singlestep = 0;
@@ -148,6 +152,15 @@ long proctrace_wait() {
 		}
 		close(fd);
 	}
+
+	siginfo_t a;
+	if (proctrace(PTRACE_GETSIGINFO, attached_pid, NULL, (void *)&a) == -1) {
+		*status = 0;
+	} else {
+		*status = a.si_signo;
+		printf("proctrace... got %d\n", a.si_signo);
+	}
+
 
 	proctrace_wait_mask = ((1ULL << 31) - 1) << 1;
 
@@ -196,7 +209,7 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 			proctrace_wait_mask |= 1;
 		break;
 	case PTRACE_KILL:
-		retval = kill(attached_pid, SIGKILL);
+		retval = kill(attached_pid, (int) data);
 		break;
 	case PTRACE_SINGLESTEP:
 		singlestep = 1;
