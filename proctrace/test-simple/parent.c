@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/reg.h>
 #include "../proctrace.h"
+#include <linux/errno.h>
 
 int pid;
 
@@ -29,6 +31,9 @@ int main(int argc, char *argv[]) {
 	proctrace_wait();
 	print_signal();
 	printf("child did it's thing. continuing and waiting for child to quit...\n");
+
+	//long sc = proctrace(PTRACE_PEEKUSER, pid, 4 * ORIG_EAX, NULL);
+
 	proctrace(PTRACE_CONT, pid, NULL, NULL);
 	proctrace_wait();
 

@@ -1,3 +1,6 @@
+#ifndef _PROCTRACE
+#define _PROCTRACE
+
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include <stdlib.h>
@@ -101,8 +104,9 @@ static long copyfromfile(const char *filename, char* buf, int size) {
 }
 
 static int traceme() {
-	fprintf(stderr, "not supported yet\n");
-	exit(1);
+	// may not work!
+	kill(getpid(), SIGSTOP);
+	return 0;
 }
 
 static int ctl(const char *command) {
@@ -151,6 +155,8 @@ long proctrace_wait() {
 }
 
 long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *data) {
+	return ptrace(__request, pid, addr, data);
+
 	long retval = 0;
 
 	if (attached_pid != 0 && attached_pid != pid) {
@@ -253,3 +259,5 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 	return retval;
 }
 
+
+#endif
