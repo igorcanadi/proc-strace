@@ -35,3 +35,4 @@ Makefile.in
 
 /proctrace/test-simple/parent
 /proctrace/test-simple/child
+/proctrace/test-simple/ptrace_parent
