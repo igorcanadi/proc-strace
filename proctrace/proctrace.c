@@ -1,4 +1,5 @@
 #include "proctrace.h"
+//#define USE_PTRACE
 
 unsigned long long proctrace_wait_mask = 0;
 int singlestep = 0;
@@ -92,7 +93,9 @@ static int ctl(const char *command) {
 
 // substitute for wait4() system call
 pid_t proctrace_wait(pid_t pid, int *status, int options, struct rusage *rusage) {
+#ifdef USE_PTRACE
 	return wait4(pid, status, options, rusage);
+#endif
 
 	pid_t retval;
 	if (singlestep) {
@@ -120,12 +123,14 @@ pid_t proctrace_wait(pid_t pid, int *status, int options, struct rusage *rusage)
 		close(fd);
 	}
 
-	siginfo_t a;
-	if (proctrace(PTRACE_GETSIGINFO, attached_pid, NULL, (void *)&a) == -1) {
-		*status = 0;
-	} else {
-		*status = a.si_signo;
-		printf("proctrace... got %d\n", a.si_signo);
+	if (status) {
+		siginfo_t a;
+		if (proctrace(PTRACE_GETSIGINFO, attached_pid, NULL, (void *)&a) == -1) {
+			*status = 0;
+		} else {
+			*status = a.si_signo;
+			printf("proctrace... got %d\n", a.si_signo);
+		}
 	}
 
 
@@ -135,7 +140,10 @@ pid_t proctrace_wait(pid_t pid, int *status, int options, struct rusage *rusage)
 }
 
 long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *data) {
+#ifdef USE_PTRACE
 	return ptrace(__request, pid, addr, data);
+#endif
+	printf("proctrace called with pid %d\n", pid);
 
 	long retval = 0;
 
@@ -225,10 +233,10 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 		setoptions((int) data);
 		break;
 	case PTRACE_GETEVENTMSG:
-		copyfromfile("evetmessage", (char *) data, sizeof(unsigned long int));
+		retval = copyfromfile("evetmessage", (char *) data, sizeof(unsigned long int));
 		break;
 	case PTRACE_GETSIGINFO:
-		copyfromfile("last_siginfo", (char *) data, sizeof(siginfo_t));
+		retval = copyfromfile("last_siginfo", (char *) data, sizeof(siginfo_t));
 		break;
 	case PTRACE_SETSIGINFO:
 		fprintf(stderr, "not supported yet\n");
