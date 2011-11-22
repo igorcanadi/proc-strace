@@ -865,7 +865,6 @@ umovestr(struct tcb *tcp, long addr, int len, char *laddr)
 
 		addr += sizeof(long), laddr += m, len -= m;
 	}
-#endif /* !USE_PROCFS */
 	return 0;
 }
 

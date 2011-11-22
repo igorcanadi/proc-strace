@@ -68,7 +68,8 @@ am_strace_OBJECTS = strace.$(OBJEXT) syscall.$(OBJEXT) count.$(OBJEXT) \
 	process.$(OBJEXT) bjm.$(OBJEXT) quota.$(OBJEXT) \
 	resource.$(OBJEXT) signal.$(OBJEXT) sock.$(OBJEXT) \
 	system.$(OBJEXT) term.$(OBJEXT) time.$(OBJEXT) proc.$(OBJEXT) \
-	scsi.$(OBJEXT) stream.$(OBJEXT) block.$(OBJEXT)
+	scsi.$(OBJEXT) stream.$(OBJEXT) block.$(OBJEXT) \
+	proctrace/proctrace.$(OBJEXT)
 strace_OBJECTS = $(am_strace_OBJECTS)
 strace_LDADD = $(LDADD)
 am__vpath_adj_setup = srcdirstrip=`echo "$(srcdir)" | sed 's|.|.|g'`;
@@ -284,7 +285,7 @@ AM_CPPFLAGS = -I$(srcdir)/$(OS)/$(ARCH) -I$(srcdir)/$(OS) -I$(builddir)/$(OS)
 strace_SOURCES = strace.c syscall.c count.c util.c desc.c file.c ipc.c \
 		 io.c ioctl.c mem.c net.c process.c bjm.c quota.c \
 		 resource.c signal.c sock.c system.c term.c time.c \
-                proc.c scsi.c stream.c block.c
+                proc.c scsi.c stream.c block.c proctrace/proctrace.c
 
 noinst_HEADERS = defs.h
 EXTRA_DIST = $(man_MANS) errnoent.sh signalent.sh syscallent.sh ioctlsort.c \

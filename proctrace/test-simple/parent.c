@@ -22,20 +22,20 @@ int main(int argc, char *argv[]) {
 	printf("attaching\n");
 	proctrace(PTRACE_ATTACH, pid, NULL, NULL);
 	printf("waiting for child to stop\n");
-	proctrace_wait();
+	proctrace_wait(-1, NULL, 0, NULL);
 	print_signal();
 	printf("waited. child should be stopped\n");
 	proctrace(PTRACE_SYSCALL, pid, NULL, NULL);
 	proctrace(PTRACE_CONT, pid, NULL, NULL);
 	printf("waiting for the system call\n");
-	proctrace_wait();
+	proctrace_wait(-1, NULL, 0, NULL);
 	print_signal();
 	printf("child did it's thing. continuing and waiting for child to quit...\n");
 
 	//long sc = proctrace(PTRACE_PEEKUSER, pid, 4 * ORIG_EAX, NULL);
 
 	proctrace(PTRACE_CONT, pid, NULL, NULL);
-	proctrace_wait();
+	proctrace_wait(-1, NULL, 0, NULL);
 
 	return 0;
 }
