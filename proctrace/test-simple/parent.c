@@ -32,7 +32,8 @@ int main(int argc, char *argv[]) {
 	print_signal();
 	printf("child did it's thing. continuing and waiting for child to quit...\n");
 
-	//long sc = proctrace(PTRACE_PEEKUSER, pid, 4 * ORIG_EAX, NULL);
+	long sc = proctrace(PTRACE_PEEKUSER, pid, (void*) (4 * ORIG_EAX), NULL);
+	printf("not minus 1: %ld\n", sc);
 
 	proctrace(PTRACE_CONT, pid, NULL, NULL);
 	proctrace_wait(-1, NULL, 0, NULL);

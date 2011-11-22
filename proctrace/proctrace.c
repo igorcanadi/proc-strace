@@ -31,9 +31,12 @@ static void setoptions(int data) {
 static long readfile(const char *filename, long addr) {
 	char buf[35];
 	sprintf(buf, "/proc/%d/%s", attached_pid, filename);
+	printf("Reading %s\n", buf);
 
 	int fd = open(buf, O_RDONLY);
+	printf("fd: %d\n", fd);
 	lseek(fd, addr, SEEK_SET);
+	printf("addr: %ld\n", addr);
 	long retvalue;
 	if (read(fd, &retvalue, sizeof(retvalue)) < 0) {
 		printf("read failed\n");
@@ -68,6 +71,18 @@ static long copyfromfile(const char *filename, char* buf, int size) {
 	int fd = open(filenamebuf, O_RDONLY);
 	long retvalue;
 	retvalue = read(fd, buf, size);
+	close(fd);
+
+	return retvalue;
+}
+
+static long copytofile(const char *filename, char* buf, int size) {
+	char filenamebuf[35];
+	sprintf(filenamebuf, "/proc/%d/%s", attached_pid, filename);
+
+	int fd = open(filenamebuf, O_WRONLY);
+	long retvalue;
+	retvalue = write(fd, buf, size);
 	close(fd);
 
 	return retvalue;
@@ -143,7 +158,6 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 #ifdef USE_PTRACE
 	return ptrace(__request, pid, addr, data);
 #endif
-	printf("proctrace called with pid %d\n", pid);
 
 	long retval = 0;
 
@@ -161,20 +175,14 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 		retval = readfile("mem", (long)addr);
 		break;
 	case PTRACE_PEEKUSER:
-		// TODO
-		ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-		retval = ptrace(PTRACE_PEEKUSER, pid, addr, data);
-		ptrace(PTRACE_DETACH, pid, NULL, NULL);
+		retval = readfile("uregs", (long)addr);
 		break;
 	case PTRACE_POKETEXT:
 	case PTRACE_POKEDATA:
 		retval = writefile("mem", (long) addr, (long) data);
 		break;
 	case PTRACE_POKEUSER:
-		// TODO
-		ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-		retval = ptrace(PTRACE_POKEUSER, pid, addr, data);
-		ptrace(PTRACE_DETACH, pid, NULL, NULL);
+		retval = writefile("uregs", (long)addr, (long) data);
 		break;
 	case PTRACE_CONT:
 		if (data) 
@@ -191,32 +199,32 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 		retval = 0;
 		break;
 	case PTRACE_GETREGS:
-		// TODO
-		ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-		retval = ptrace(PTRACE_GETREGS, pid, addr, data);
-		ptrace(PTRACE_DETACH, pid, NULL, NULL);
-		/* Read all the bytes from "regs"; same as calling ptrace with
-		 * GETREGS */
+		retval = copyfromfile("regs", (char *) data,
+				sizeof(struct user_regs_struct));
+		if (retval == sizeof(struct user_regs_struct)) {
+			retval = 0;
+		}
 		break;
 	case PTRACE_SETREGS:
-		// TODO
-		ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-		retval = ptrace(PTRACE_SETREGS, pid, addr, data);
-		ptrace(PTRACE_DETACH, pid, NULL, NULL);
-		/* Same as GETREGS except use write to write the entire struct
-		 * to the file */
+		retval = copytofile("regs", (char *) data,
+				sizeof(struct user_regs_struct));
+		if (retval == sizeof(struct user_regs_struct)) {
+			retval = 0;
+		}
 		break;
 	case PTRACE_GETFPREGS:
-		// TODO
-		ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-		retval = ptrace(PTRACE_GETFPREGS, pid, addr, data);
-		ptrace(PTRACE_DETACH, pid, NULL, NULL);
+		retval = copyfromfile("fpregs", (char *) data,
+				sizeof(struct user_fpregs_struct));
+		if (retval == sizeof(struct user_fpregs_struct)) {
+			retval = 0;
+		}
 		break;
 	case PTRACE_SETFPREGS:
-		// TODO
-		ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-		retval = ptrace(PTRACE_SETFPREGS, pid, addr, data);
-		ptrace(PTRACE_DETACH, pid, NULL, NULL);
+		retval = copytofile("fpregs", (char *) data,
+				sizeof(struct user_fpregs_struct));
+		if (retval == sizeof(struct user_fpregs_struct)) {
+			retval = 0;
+		}
 		break;
 	case PTRACE_ATTACH:
 		attached_pid = pid;
@@ -233,7 +241,7 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 		setoptions((int) data);
 		break;
 	case PTRACE_GETEVENTMSG:
-		retval = copyfromfile("evetmessage", (char *) data, sizeof(unsigned long int));
+		retval = copyfromfile("eventmessage", (char *) data, sizeof(unsigned long int));
 		break;
 	case PTRACE_GETSIGINFO:
 		retval = copyfromfile("last_siginfo", (char *) data, sizeof(siginfo_t));
