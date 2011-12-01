@@ -1,4 +1,4 @@
-all: ../proctrace.h child parent ptrace_parent
+all: ../proctrace.h child parent ptrace_parent syscalls
 
 ptrace_parent: ptrace_parent.c
 	gcc ptrace_parent.c -optrace_parent -O3 -g
@@ -8,6 +8,9 @@ child: child.c ../proctrace.c
 
 parent: parent.c ../proctrace.c
 	gcc parent.c ../proctrace.c -oparent -O3 -g
+
+syscalls: syscalls.c ../proctrace.c
+	gcc syscalls.c ../proctrace.c -osyscalls -O3 -g
 
 clean:
 	rm parent child

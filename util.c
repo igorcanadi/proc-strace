@@ -796,7 +796,7 @@ umoven(struct tcb *tcp, long addr, int len, char *laddr)
 				return 0;
 			}
 			if (addr != 0 && errno != EIO && errno != ESRCH)
-				perror("ptrace: umoven");
+				//perror("ptrace: umoven");
 			return -1;
 		}
 		started = 1;

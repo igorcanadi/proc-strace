@@ -184,7 +184,7 @@ CFLAGS = -g -O2
 CPP = gcc -E
 CPPFLAGS = 
 CYGPATH_W = echo
-DEFS = -DHAVE_CONFIG_H
+DEFS = -DHAVE_CONFIG_H 
 DEPDIR = .deps
 ECHO_C = 
 ECHO_N = -n
@@ -949,6 +949,7 @@ maintainer-clean-generic:
 	@echo "it deletes files that may require special tools to rebuild."
 	-test -z "$(BUILT_SOURCES)" || rm -f $(BUILT_SOURCES)
 clean: clean-recursive
+	rm proctrace/proctrace.o
 
 clean-am: clean-binPROGRAMS clean-generic mostlyclean-am
 

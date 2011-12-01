@@ -82,10 +82,11 @@ extern char *optarg;
 int debug = 0, followfork = 0;
 int dtime = 0, xflag = 0, qflag = 0;
 cflag_t cflag = CFLAG_NONE;
-static int iflag = 0, interactive = 0, pflag_seen = 0, rflag = 0, tflag = 0;
+static int iflag = 0, pflag_seen = 0, rflag = 0, tflag = 0;
 
 /* Sometimes we want to print only succeeding syscalls. */
 int not_failing_only = 0;
+int child_pid = 0;
 
 static int exit_code = 0;
 static int strace_child = 0;
@@ -321,15 +322,6 @@ startup_attach(void)
 	int tcbi;
 	struct tcb *tcp;
 
-	/*
-	 * Block user interruptions as we would leave the traced
-	 * process stopped (process state T) if we would terminate in
-	 * between PTRACE_ATTACH and wait4 () on SIGSTOP.
-	 * We rely on cleanup () from this point on.
-	 */
-	if (interactive)
-		sigprocmask(SIG_BLOCK, &blocked_set, NULL);
-
 	for (tcbi = 0; tcbi < tcbtabsize; tcbi++) {
 		tcp = tcbtab[tcbi];
 		if (!(tcp->flags & TCB_INUSE) || !(tcp->flags & TCB_ATTACHED))
@@ -354,8 +346,6 @@ startup_attach(void)
 				tcp->pid);
 	}
 
-	if (interactive)
-		sigprocmask(SIG_SETMASK, &empty_set, NULL);
 }
 
 static void
@@ -435,13 +425,6 @@ startup_child (char **argv)
 		if (outf!=stderr)
 			close(fileno (outf));
 
-		if (proctrace(PTRACE_TRACEME, 0, (char *) 1, 0) < 0) {
-			perror("strace: ptrace(PTRACE_TRACEME, ...)");
-			exit(1);
-		}
-		if (debug)
-			kill(pid, SIGSTOP);
-
 		if (username != NULL || geteuid() == 0) {
 			uid_t run_euid = run_uid;
 			gid_t run_egid = run_gid;
@@ -473,21 +456,17 @@ startup_child (char **argv)
 		else
 			setreuid(run_uid, run_uid);
 
-		/*
-		 * Induce an immediate stop so that the parent
-		 * will resume us with PTRACE_SYSCALL and display
-		 * this execve call normally.
-		 * Unless of course we're on a no-MMU system where
-		 * we vfork()-ed, so we cannot stop the child.
-		 */
-		if (!strace_vforked)
-			kill(getpid(), SIGSTOP);
+		if (proctrace(PTRACE_TRACEME, 0, (char *) 1, 0) < 0) {
+			perror("strace: ptrace(PTRACE_TRACEME, ...)");
+			exit(1);
+		}
 
 		execv(pathname, argv);
 		perror("strace: exec");
 		_exit(1);
 	}
 
+	child_pid = pid;
 	/* We are the tracer.  */
 	tcp = alloctcb(pid);
 }
@@ -517,7 +496,6 @@ main(int argc, char *argv[])
 		tcbtab[tcp - tcbtab[0]] = &tcbtab[0][tcp - tcbtab[0]];
 
 	outf = stderr;
-	interactive = 1;
 	set_sortby(DEFAULT_SORTBY);
 	set_personality(DEFAULT_PERSONALITY);
 	qualify("trace=all");
@@ -683,7 +661,6 @@ main(int argc, char *argv[])
 	if (!outfname || outfname[0] == '|' || outfname[0] == '!')
 		setvbuf(outf, buf, _IOLBF, BUFSIZ);
 	if (outfname && optind < argc) {
-		interactive = 0;
 		qflag = 1;
 	}
 
@@ -709,18 +686,6 @@ main(int argc, char *argv[])
 	sa.sa_flags = 0;
 	sigaction(SIGTTOU, &sa, NULL);
 	sigaction(SIGTTIN, &sa, NULL);
-	if (interactive) {
-		sigaddset(&blocked_set, SIGHUP);
-		sigaddset(&blocked_set, SIGINT);
-		sigaddset(&blocked_set, SIGQUIT);
-		sigaddset(&blocked_set, SIGPIPE);
-		sigaddset(&blocked_set, SIGTERM);
-		sa.sa_handler = interrupt;
-#ifdef SUNOS4
-		/* POSIX signals on sunos4.1 are a little broken. */
-		sa.sa_flags = SA_INTERRUPT;
-#endif /* SUNOS4 */
-	}
 	sigaction(SIGHUP, &sa, NULL);
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGQUIT, &sa, NULL);
@@ -1157,22 +1122,14 @@ trace()
 	while (nprocs != 0) {
 		if (interrupted)
 			return 0;
-		if (interactive)
-			sigprocmask(SIG_SETMASK, &empty_set, NULL);
-		pid = proctrace_wait(-1, &status, wait4_options, cflag ? &ru : NULL);
+
+		proctrace(PTRACE_SYSCALL, child_pid, NULL, NULL);
+
+		pid = proctrace_wait(child_pid, &status, wait4_options, cflag ? &ru : NULL);
 		if (pid < 0 && !(wait4_options & __WALL) && errno == ECHILD) {
 			printf("This should not happen\n");
-			/* most likely a "cloned" process */
-			pid = wait4(-1, &status, __WCLONE,
-					cflag ? &ru : NULL);
-			if (pid == -1) {
-				fprintf(stderr, "strace: clone wait4 "
-						"failed: %s\n", strerror(errno));
-			}
 		}
 		wait_errno = errno;
-		if (interactive)
-			sigprocmask(SIG_BLOCK, &blocked_set, NULL);
 
 		if (pid == -1) {
 			switch (wait_errno) {
@@ -1285,36 +1242,6 @@ trace()
 		if (debug)
 			fprintf(stderr, "pid %u stopped, [%s]\n",
 				pid, signame(WSTOPSIG(status)));
-
-		/*
-		 * Interestingly, the process may stop
-		 * with STOPSIG equal to some other signal
-		 * than SIGSTOP if we happend to attach
-		 * just before the process takes a signal.
-		 * A no-MMU vforked child won't send up a signal,
-		 * so skip the first (lost) execve notification.
-		 */
-		if ((tcp->flags & TCB_STARTUP) &&
-		    (WSTOPSIG(status) == SIGSTOP || strace_vforked)) {
-			/*
-			 * This flag is there to keep us in sync.
-			 * Next time this process stops it should
-			 * really be entering a system call.
-			 */
-			tcp->flags &= ~TCB_STARTUP;
-			if (tcp->flags & TCB_BPTSET) {
-				/*
-				 * One example is a breakpoint inherited from
-				 * parent through fork ().
-				 */
-				if (clearbpt(tcp) < 0) /* Pretty fatal */ {
-					droptcb(tcp);
-					cleanup();
-					return -1;
-				}
-			}
-			goto tracing;
-		}
 
 		if (WSTOPSIG(status) != SIGTRAP) {
 			if (WSTOPSIG(status) == SIGSTOP &&

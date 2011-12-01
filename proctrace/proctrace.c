@@ -28,19 +28,23 @@ static void setoptions(int data) {
 }
 
 // read a word from a file on address addr and return it
-static long readfile(const char *filename, long addr) {
+static long readfile(const char *filename, unsigned long long addr) {
 	char buf[35];
 	sprintf(buf, "/proc/%d/%s", attached_pid, filename);
-	printf("Reading %s\n", buf);
 
 	int fd = open(buf, O_RDONLY);
-	printf("fd: %d\n", fd);
-	lseek(fd, addr, SEEK_SET);
-	printf("addr: %ld\n", addr);
-	long retvalue;
+	lseek(fd, 0, SEEK_SET);
+
+	int i;
+	for (i = 0; i < 4; ++i) {
+		lseek(fd, addr >> 2, SEEK_CUR);
+	}
+	lseek(fd, addr & 3, SEEK_CUR);
+
+
+	long retvalue = 0;
 	if (read(fd, &retvalue, sizeof(retvalue)) < 0) {
-		printf("read failed\n");
-		exit(1);
+		return -1;
 	}
 	close(fd);
 
@@ -54,14 +58,13 @@ static long writefile(const char *filename, long addr, long data) {
 
 	int fd = open(buf, O_WRONLY);
 	lseek(fd, addr, SEEK_SET);
-	long retvalue;
 	if (write(fd, &data, sizeof(data)) < 0) {
 		printf("write failed\n");
 		exit(1);
 	}
 	close(fd);
 
-	return retvalue;
+	return 0;
 }
 
 static long copyfromfile(const char *filename, char* buf, int size) {
@@ -88,12 +91,6 @@ static long copytofile(const char *filename, char* buf, int size) {
 	return retvalue;
 }
 
-static int traceme() {
-	// may not work!
-	kill(getpid(), SIGSTOP);
-	return 0;
-}
-
 static int ctl(const char *command) {
 	char buf[35];
 	sprintf(buf, "/proc/%d/ctl", attached_pid);
@@ -106,34 +103,63 @@ static int ctl(const char *command) {
 	return retvalue;
 }
 
+static int traceme() {
+	// may not work!
+	attached_pid = getpid();
+	ctl("stop");
+	return 0;
+}
+
+void disable_signal() {
+	char buf[35];
+	sprintf(buf, "/proc/%d/last_siginfo", attached_pid);
+
+	int fd = open(buf, O_WRONLY);
+	int a = 0;
+	write(fd, &a, 4);
+	close(fd);
+
+	return 0;
+}
+
 // substitute for wait4() system call
 pid_t proctrace_wait(pid_t pid, int *status, int options, struct rusage *rusage) {
 #ifdef USE_PTRACE
 	return wait4(pid, status, options, rusage);
 #endif
 
-	pid_t retval;
+	disable_signal();
+
+	if (attached_pid == 0) {
+		if (pid == -1) {
+			printf("I don't know what to do in proctrace_wait\n");
+			exit(1);
+		}
+		attached_pid = pid;
+	}
+
 	if (singlestep) {
-		retval = ctl("step");
+		ctl("step");
 		singlestep = 0;
 	} else {
 		char buf[35];
 		sprintf(buf, "/proc/%d/wait", attached_pid);
-		printf("%s\n", buf);
 
 		int fd = open(buf, O_WRONLY);
-		long retvalue;
+		proctrace_wait_mask = ((1ULL << 31) - 1) << 1;
+		proctrace_wait_mask |= 1ULL;
 		proctrace_wait_mask |= (1ULL << 40);
-		printf("waiting on: %llX\n", proctrace_wait_mask);
+		// temp hack for strace 
+		proctrace_wait_mask |= (1ULL << 33);
 		unsigned long long big_endian = 0;
 		int i;
 		for (i = 0; i < 8; ++i) {
 			big_endian |= ((proctrace_wait_mask >> (8*i)) & ((1 << 8)-1)) << (8-i-1)*8;
 		}
 
-		retvalue = write(fd, &big_endian, sizeof(big_endian));
-		if (retval < 0) {
-			printf("write to wait failed\n");
+		long retvalue = write(fd, &big_endian, sizeof(big_endian));
+		if (retvalue < 0) {
+			printf("write to wait failed, fd: %d, buf: %s\n", fd, buf);
 		}
 		close(fd);
 	}
@@ -143,23 +169,24 @@ pid_t proctrace_wait(pid_t pid, int *status, int options, struct rusage *rusage)
 		if (proctrace(PTRACE_GETSIGINFO, attached_pid, NULL, (void *)&a) == -1) {
 			*status = 0;
 		} else {
-			*status = a.si_signo;
-			printf("proctrace... got %d\n", a.si_signo);
+			if (a.si_signo == 0) a.si_signo = SIGSTOP;
+			if (a.si_signo > 32) {
+				*status = (SIGTRAP << 8) | 0177;
+			} else {
+				*status = (a.si_signo << 8) | 0177;
+			}
 		}
 	}
 
-
-	proctrace_wait_mask = ((1ULL << 31) - 1) << 1;
-
-	return retval;
+	return attached_pid;
 }
 
 long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *data) {
-#ifdef USE_PTRACE
-	return ptrace(__request, pid, addr, data);
-#endif
-
 	long retval = 0;
+#ifdef USE_PTRACE
+	retval = ptrace(__request, pid, addr, data);
+	return retval;
+#endif
 
 	if (attached_pid != 0 && attached_pid != pid) {
 		fprintf(stderr, "i can only trace one guy\n");
@@ -172,7 +199,7 @@ long proctrace(enum __ptrace_request __request, pid_t pid, void *addr, void *dat
 		break;
 	case PTRACE_PEEKTEXT:
 	case PTRACE_PEEKDATA:
-		retval = readfile("mem", (long)addr);
+		retval = readfile("mem", (unsigned long long)addr);
 		break;
 	case PTRACE_PEEKUSER:
 		retval = readfile("uregs", (long)addr);
